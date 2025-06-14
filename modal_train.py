@@ -1,13 +1,14 @@
 import modal
 
-from model import GPTConfig, GPT
-
 
 app = modal.App()
 image = (
     modal.Image.debian_slim()
     .pip_install("torch", "numpy", "transformers", "tiktoken", "wandb", "tqdm")
     .apt_install("git")
+    .add_local_file("model.py", "/root/model.py")
+    .add_local_dir("config", "/root/config")
+    .add_local_dir("data", "/root/data")
 )
 
 @app.function(gpu="A100", image=image, timeout=3600*12)  # 12 hour timeout for long training
@@ -40,6 +41,8 @@ def train(config_file=None):
     import torch
     from torch.nn.parallel import DistributedDataParallel as DDP
     from torch.distributed import init_process_group, destroy_process_group
+    
+    from model import GPTConfig, GPT
 
     # -----------------------------------------------------------------------------
     # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -85,14 +88,24 @@ def train(config_file=None):
     dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
     compile = True # use PyTorch 2.0 to compile the model to be faster
     # -----------------------------------------------------------------------------
-    config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
     # Handle config file override if provided
     if config_file:
         print(f"Overriding config with {config_file}:")
         with open(config_file) as f:
             config_content = f.read()
             print(config_content)
-        exec(config_content)
+        # Create a namespace for the config values
+        config_namespace = {}
+        exec(config_content, globals(), config_namespace)
+        # Update variables with config values
+        for key, value in config_namespace.items():
+            if not key.startswith('_'):
+                globals()[key] = value
+                print(f"Set {key} = {value}")
+        # Update the local dataset variable
+        dataset = globals().get('dataset', dataset)
+    
+    config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
     config = {k: globals()[k] for k in config_keys} # will be useful for logging
     # -----------------------------------------------------------------------------
 
@@ -130,7 +143,9 @@ def train(config_file=None):
     ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
     # poor man's data loader
+    print(f"Using dataset: {dataset}")
     data_dir = os.path.join('data', dataset)
+    print(f"Data directory: {data_dir}")
     def get_batch(split):
         # We recreate np.memmap every batch to avoid a memory leak, as per
         # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
