@@ -76,7 +76,7 @@ def train(config_file=None, enable_profiling=False):
     bias = False # do we use bias inside LayerNorm and Linear layers?
     # adamw optimizer
     learning_rate = 6e-4 # max learning rate
-    max_iters = 50 # 600000 # total number of training iterations
+    max_iters = 600000 # total number of training iterations
     weight_decay = 1e-1
     beta1 = 0.9
     beta2 = 0.95
@@ -101,17 +101,17 @@ def train(config_file=None, enable_profiling=False):
             print(config_content)
         # Create a namespace for the config values
         config_namespace = {}
-        exec(config_content, globals(), config_namespace)
+        exec(config_content, locals(), config_namespace)
         # Update variables with config values
         for key, value in config_namespace.items():
             if not key.startswith('_'):
-                globals()[key] = value
+                locals()[key] = value
                 print(f"Set {key} = {value}")
         # Update the local dataset variable
-        dataset = globals().get('dataset', dataset)
+        dataset = locals().get('dataset', dataset)
 
-    config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
-    config = {k: globals()[k] for k in config_keys} # will be useful for logging
+    config_keys = [k for k,v in locals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
+    config = {k: locals()[k] for k in config_keys} # will be useful for logging
     # -----------------------------------------------------------------------------
 
     # various inits, derived attributes, I/O setup
