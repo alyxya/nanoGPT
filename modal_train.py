@@ -2,6 +2,11 @@ import modal
 
 
 app = modal.App()
+
+# Create volume for profiling traces
+traces = modal.Volume.from_name("nanogpt-traces", create_if_missing=True)
+TRACE_DIR = "/traces"
+
 image = (
     modal.Image.debian_slim()
     .pip_install("torch", "numpy", "transformers", "tiktoken", "wandb", "tqdm")
@@ -11,8 +16,8 @@ image = (
     .add_local_dir("data", "/root/data")
 )
 
-@app.function(gpu="A100", image=image, timeout=3600*12)  # 12 hour timeout for long training
-def train(config_file=None):
+@app.function(gpu="A100", image=image, timeout=3600*12, volumes={TRACE_DIR: traces})  # 12 hour timeout for long training
+def train(config_file=None, enable_profiling=False):
     """
     This training script can be run both on a single gpu in debug mode,
     and also in a larger training run with distributed data parallel (ddp).
@@ -285,6 +290,23 @@ def train(config_file=None):
     local_iter_num = 0 # number of iterations in the lifetime of this process
     raw_model = model.module if ddp else model # unwrap DDP container if needed
     running_mfu = -1.0
+    
+    # Setup profiling if enabled
+    prof = None
+    if enable_profiling:
+        prof = torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=2),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(f"{TRACE_DIR}/nanogpt_profile"),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True
+        )
+        prof.start()
+    
     while True:
 
         # determine and set the learning rate for this iteration
@@ -358,6 +380,11 @@ def train(config_file=None):
                 mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
                 running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
             print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        
+        # Step profiler if enabled
+        if prof is not None:
+            prof.step()
+            
         iter_num += 1
         local_iter_num += 1
 
@@ -365,14 +392,19 @@ def train(config_file=None):
         if iter_num > max_iters:
             break
 
+    # Stop profiler if enabled and save trace
+    if prof is not None:
+        prof.stop()
+        print(f"Profiling traces saved to {TRACE_DIR}/nanogpt_profile")
+
     if ddp:
         destroy_process_group()
 
 
 @app.local_entrypoint()
-def main(config_file: str = None):
+def main(config_file: str = None, enable_profiling: bool = False):
     """
-    Entry point for running modal training with optional config file.
-    Usage: modal run modal_train.py --config-file config/train_shakespeare_char.py
+    Entry point for running modal training with optional config file and profiling.
+    Usage: modal run modal_train.py --config-file config/train_shakespeare_char.py --enable-profiling
     """
-    train.remote(config_file)
+    train.remote(config_file, enable_profiling)
