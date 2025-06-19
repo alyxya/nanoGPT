@@ -46,7 +46,7 @@ def train(config_file=None, enable_profiling=False):
     import torch
     from torch.nn.parallel import DistributedDataParallel as DDP
     from torch.distributed import init_process_group, destroy_process_group
-    
+
     from model import GPTConfig, GPT
 
     # -----------------------------------------------------------------------------
@@ -76,7 +76,7 @@ def train(config_file=None, enable_profiling=False):
     bias = False # do we use bias inside LayerNorm and Linear layers?
     # adamw optimizer
     learning_rate = 6e-4 # max learning rate
-    max_iters = 600000 # total number of training iterations
+    max_iters = 50 # 600000 # total number of training iterations
     weight_decay = 1e-1
     beta1 = 0.9
     beta2 = 0.95
@@ -109,7 +109,7 @@ def train(config_file=None, enable_profiling=False):
                 print(f"Set {key} = {value}")
         # Update the local dataset variable
         dataset = globals().get('dataset', dataset)
-    
+
     config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
     config = {k: globals()[k] for k in config_keys} # will be useful for logging
     # -----------------------------------------------------------------------------
@@ -290,7 +290,7 @@ def train(config_file=None, enable_profiling=False):
     local_iter_num = 0 # number of iterations in the lifetime of this process
     raw_model = model.module if ddp else model # unwrap DDP container if needed
     running_mfu = -1.0
-    
+
     # Setup profiling if enabled
     prof = None
     if enable_profiling:
@@ -306,7 +306,7 @@ def train(config_file=None, enable_profiling=False):
             with_stack=True
         )
         prof.start()
-    
+
     while True:
 
         # determine and set the learning rate for this iteration
@@ -380,11 +380,11 @@ def train(config_file=None, enable_profiling=False):
                 mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
                 running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
             print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
-        
+
         # Step profiler if enabled
         if prof is not None:
             prof.step()
-            
+
         iter_num += 1
         local_iter_num += 1
 
