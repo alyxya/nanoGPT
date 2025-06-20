@@ -5,9 +5,11 @@ from typing import Optional
 
 app = modal.App()
 
-# Create volume for profiling traces
+# Create volumes for profiling traces and model outputs
 traces = modal.Volume.from_name("nanogpt-traces", create_if_missing=True)
+checkpoints = modal.Volume.from_name("nanogpt-checkpoints", create_if_missing=True)
 TRACE_DIR = "/traces"
+CHECKPOINT_DIR = "/checkpoints"
 
 image = (
     modal.Image.debian_slim()
@@ -18,7 +20,7 @@ image = (
     .add_local_dir("data", "/root/data")
 )
 
-@app.function(gpu="A100", image=image, timeout=3600*12, volumes={TRACE_DIR: traces})  # 12 hour timeout for long training
+@app.function(gpu="A100", image=image, timeout=3600*12, volumes={TRACE_DIR: traces, CHECKPOINT_DIR: checkpoints})  # 12 hour timeout for long training
 def train(config_file=None, enable_profiling=False):
     """
     This training script can be run both on a single gpu in debug mode,
@@ -54,7 +56,7 @@ def train(config_file=None, enable_profiling=False):
     @dataclass
     class TrainingConfig:
         # I/O
-        out_dir: str = 'out'
+        out_dir: str = '/checkpoints/out'
         eval_interval: int = 2000
         log_interval: int = 1
         eval_iters: int = 200
