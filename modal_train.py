@@ -1,4 +1,6 @@
 import modal
+from dataclasses import dataclass, asdict
+from typing import Optional
 
 
 app = modal.App()
@@ -49,69 +51,113 @@ def train(config_file=None, enable_profiling=False):
 
     from model import GPTConfig, GPT
 
-    # -----------------------------------------------------------------------------
-    # default config values designed to train a gpt2 (124M) on OpenWebText
-    # I/O
-    out_dir = 'out'
-    eval_interval = 2000
-    log_interval = 1
-    eval_iters = 200
-    eval_only = False # if True, script exits right after the first eval
-    always_save_checkpoint = True # if True, always save a checkpoint after each eval
-    init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
-    # wandb logging
-    wandb_log = False # disabled by default
-    wandb_project = 'owt'
-    wandb_run_name = 'gpt2' # 'run' + str(time.time())
-    # data
-    dataset = 'openwebtext'
-    gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
-    batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
-    block_size = 1024
-    # model
-    n_layer = 12
-    n_head = 12
-    n_embd = 768
-    dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
-    bias = False # do we use bias inside LayerNorm and Linear layers?
-    # adamw optimizer
-    learning_rate = 6e-4 # max learning rate
-    max_iters = 600000 # total number of training iterations
-    weight_decay = 1e-1
-    beta1 = 0.9
-    beta2 = 0.95
-    grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
-    # learning rate decay settings
-    decay_lr = True # whether to decay the learning rate
-    warmup_iters = 2000 # how many steps to warm up for
-    lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
-    min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
-    # DDP settings
-    backend = 'nccl' # 'nccl', 'gloo', etc.
-    # system
-    device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
-    dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-    compile = True # use PyTorch 2.0 to compile the model to be faster
-    # -----------------------------------------------------------------------------
-    # Handle config file override if provided
-    if config_file:
-        print(f"Overriding config with {config_file}:")
-        with open(config_file) as f:
-            config_content = f.read()
-            print(config_content)
-        # Create a namespace for the config values
-        config_namespace = {}
-        exec(config_content, globals(), config_namespace)
-        # Update variables with config values
-        for key, value in config_namespace.items():
-            if not key.startswith('_'):
-                globals()[key] = value
-                print(f"Set {key} = {value}")
-        # Update the local dataset variable
-        dataset = globals().get('dataset', dataset)
+    @dataclass
+    class TrainingConfig:
+        # I/O
+        out_dir: str = 'out'
+        eval_interval: int = 2000
+        log_interval: int = 1
+        eval_iters: int = 200
+        eval_only: bool = False
+        always_save_checkpoint: bool = True
+        init_from: str = 'scratch'
+        # wandb logging
+        wandb_log: bool = False
+        wandb_project: str = 'owt'
+        wandb_run_name: str = 'gpt2'
+        # data
+        dataset: str = 'openwebtext'
+        gradient_accumulation_steps: int = 5 * 8
+        batch_size: int = 12
+        block_size: int = 1024
+        # model
+        n_layer: int = 12
+        n_head: int = 12
+        n_embd: int = 768
+        dropout: float = 0.0
+        bias: bool = False
+        # adamw optimizer
+        learning_rate: float = 6e-4
+        max_iters: int = 600000
+        weight_decay: float = 1e-1
+        beta1: float = 0.9
+        beta2: float = 0.95
+        grad_clip: float = 1.0
+        # learning rate decay settings
+        decay_lr: bool = True
+        warmup_iters: int = 2000
+        lr_decay_iters: int = 600000
+        min_lr: float = 6e-5
+        # DDP settings
+        backend: str = 'nccl'
+        # system
+        device: str = 'cuda'
+        dtype: str = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16'
+        compile: bool = True
 
-    config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
-    config = {k: globals()[k] for k in config_keys} # will be useful for logging
+        @classmethod
+        def from_file(cls, config_file: str) -> 'TrainingConfig':
+            """Load config from a Python file."""
+            config_namespace = {}
+            with open(config_file) as f:
+                config_content = f.read()
+
+            # Execute the config file in an isolated namespace
+            exec(config_content, {}, config_namespace)
+
+            # Filter out private variables and functions
+            config_values = {k: v for k, v in config_namespace.items()
+                           if not k.startswith('_') and not callable(v)}
+
+            # Create config instance with overrides
+            return cls(**config_values)
+
+    # Load configuration
+    if config_file:
+        print(f"Loading config from {config_file}")
+        config = TrainingConfig.from_file(config_file)
+        print(f"Config loaded: {asdict(config)}")
+    else:
+        config = TrainingConfig()
+        print("Using default configuration")
+
+    # Extract config values for easier access
+    out_dir = config.out_dir
+    eval_interval = config.eval_interval
+    log_interval = config.log_interval
+    eval_iters = config.eval_iters
+    eval_only = config.eval_only
+    always_save_checkpoint = config.always_save_checkpoint
+    init_from = config.init_from
+    wandb_log = config.wandb_log
+    wandb_project = config.wandb_project
+    wandb_run_name = config.wandb_run_name
+    dataset = config.dataset
+    gradient_accumulation_steps = config.gradient_accumulation_steps
+    batch_size = config.batch_size
+    block_size = config.block_size
+    n_layer = config.n_layer
+    n_head = config.n_head
+    n_embd = config.n_embd
+    dropout = config.dropout
+    bias = config.bias
+    learning_rate = config.learning_rate
+    max_iters = config.max_iters
+    weight_decay = config.weight_decay
+    beta1 = config.beta1
+    beta2 = config.beta2
+    grad_clip = config.grad_clip
+    decay_lr = config.decay_lr
+    warmup_iters = config.warmup_iters
+    lr_decay_iters = config.lr_decay_iters
+    min_lr = config.min_lr
+    backend = config.backend
+    device = config.device
+    dtype = config.dtype
+    compile = config.compile
+
+    # Convert config to dict for logging
+    config_dict = asdict(config)
     # -----------------------------------------------------------------------------
 
     # various inits, derived attributes, I/O setup
@@ -282,7 +328,7 @@ def train(config_file=None, enable_profiling=False):
     # logging
     if wandb_log and master_process:
         import wandb
-        wandb.init(project=wandb_project, name=wandb_run_name, config=config)
+        wandb.init(project=wandb_project, name=wandb_run_name, config=config_dict)
 
     # training loop
     X, Y = get_batch('train') # fetch the very first batch
@@ -335,7 +381,7 @@ def train(config_file=None, enable_profiling=False):
                         'model_args': model_args,
                         'iter_num': iter_num,
                         'best_val_loss': best_val_loss,
-                        'config': config,
+                        'config': config_dict,
                     }
                     print(f"saving checkpoint to {out_dir}")
                     torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
