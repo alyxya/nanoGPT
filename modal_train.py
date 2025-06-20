@@ -122,6 +122,13 @@ def train(config_file=None, enable_profiling=False):
     else:
         config = TrainingConfig()
         print("Using default configuration")
+    
+    # Ensure out_dir is always within the checkpoints volume
+    if not config.out_dir.startswith(CHECKPOINT_DIR):
+        # Extract the final directory name from the original out_dir
+        out_dir_name = os.path.basename(config.out_dir.rstrip('/'))
+        config.out_dir = os.path.join(CHECKPOINT_DIR, out_dir_name)
+        print(f"Adjusted out_dir to use checkpoint volume: {config.out_dir}")
 
     # Extract config values for easier access
     out_dir = config.out_dir
@@ -387,6 +394,7 @@ def train(config_file=None, enable_profiling=False):
                     }
                     print(f"saving checkpoint to {out_dir}")
                     torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+                    checkpoints.commit()
         if iter_num == 0 and eval_only:
             break
 
